@@ -3902,10 +3902,18 @@ impl KvmVcpu {
     fn nested_state(&self) -> cpu::Result<Option<KvmNestedStateBuffer>> {
         let mut buffer = KvmNestedStateBuffer::empty();
 
-        let maybe_size = self
-            .fd
-            .nested_state(&mut buffer)
-            .map_err(|e| cpu::HypervisorCpuError::GetNestedState(e.into()))?;
+        // kvm_pvm reject KVM_GET_NESTED_STATE with
+        // EINVAL/ENOTTY when nested state is unsupported, instead of
+        // returning Ok(None). Treat that as "no nested state" so live
+        // migration can proceed for non-nested guests.
+        let maybe_size = match self.fd.nested_state(&mut buffer) {
+            Ok(size) => size,
+            Err(e) if matches!(e.errno(), libc::EINVAL | libc::ENOTTY) => {
+                return Ok(None);
+            }
+            Err(e) => {               return Err(cpu::HypervisorCpuError::GetNestedState(e.into()));
+            }
+        };
 
         if let Some(_size) = maybe_size {
             Ok(Some(buffer))
